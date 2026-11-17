@@ -54,7 +54,15 @@ class MainActivity : ComponentActivity() {
     private var onIncoming: ((String) -> Unit)? = null
     private var onStatus: ((String) -> Unit)? = null
 
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        // The chat screen may start before Android finishes showing the permission prompt.
+        // Retry the Bluetooth listener only after the user grants the required permissions.
+        if (result.isNotEmpty() && result.values.all { it }) {
+            startServer()
+        } else {
+            runOnUiThread { onStatus?.invoke("Bluetooth permission is required to receive messages.") }
+        }
+    }
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothDevice.ACTION_FOUND) {
@@ -77,7 +85,13 @@ class MainActivity : ComponentActivity() {
             )
         }
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        registerReceiver(receiver, filter)
+        if (Build.VERSION.SDK_INT >= 33) {
+            // Bluetooth discovery broadcasts are sent by the Android system.
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(receiver, filter)
+        }
         askPermissions()
     }
 
@@ -113,6 +127,15 @@ class MainActivity : ComponentActivity() {
 
     @Suppress("MissingPermission")
     private fun startServer() {
+        val requiredPermission = if (Build.VERSION.SDK_INT >= 31) {
+            Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        if (ContextCompat.checkSelfPermission(this, requiredPermission) != PackageManager.PERMISSION_GRANTED) {
+            runOnUiThread { onStatus?.invoke("Allow Bluetooth permission to start receiving messages.") }
+            return
+        }
         thread {
             try {
                 val server = adapter?.listenUsingRfcommWithServiceRecord("AirTalk", SERVICE_ID) ?: return@thread
